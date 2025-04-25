@@ -5,11 +5,11 @@ from abc import ABC, abstractmethod
 
 class Role(ABC):
     @abstractmethod
-    def send_spec(self, message, addressee):
+    def send(self, message, addressee):
         pass
 
     @abstractmethod
-    def receive_spec(self, variable, sender=None):
+    def receive(self, variable, sender=None):
         pass
 
 def log_event(event):
@@ -37,7 +37,7 @@ class MessageScheduler:
             message = random.choice(self.messages)
             self.messages.remove(message)
             log_event(f"Scheduler delivers '{message.content}' from {message.sender.name} to {message.receiver.name}")
-            self.nodes[message.receiver.name].receive_spec(message.content, message.sender)
+            self.nodes[message.receiver.name].receive(message.content, message.sender)
 
 scheduler = None
 
@@ -47,11 +47,11 @@ class Initiator(Role):
         self.neighbors = neighbors
         self.received_acks = 0
 
-    def send_spec(self, message, addressees):
+    def send(self, message, addressees):
         for neighbor in addressees:
             scheduler.schedule_message(Message(message, self, neighbor))
 
-    def receive_spec(self, variable, sender=None):
+    def receive(self, variable, sender=None):
         log_event(f"Node {self.name} received '{variable}' from {sender.name}")
         if variable == "ACK":
             self.received_acks += 1
@@ -60,7 +60,7 @@ class Initiator(Role):
                 log_event(f"Node {self.name}: Algorithm finished.")
 
     def start(self):
-        self.send_spec("ECHO", self.neighbors)
+        self.send("ECHO", self.neighbors)
 
 class Participant(Role):
     def __init__(self, name, neighbors):
@@ -70,12 +70,12 @@ class Participant(Role):
         self.received = False
         self.received_acks = 0
 
-    def send_spec(self, message, addressees):
+    def send(self, message, addressees):
         for neighbor in addressees:
             if neighbor != self.parent:
                 scheduler.schedule_message(Message(message, self, neighbor))
 
-    def receive_spec(self, variable, sender=None):
+    def receive(self, variable, sender=None):
         log_event(f"Node {self.name} received '{variable}' from {sender.name}")
         if variable == "ECHO":
             if not self.received:
@@ -83,7 +83,7 @@ class Participant(Role):
                 self.parent = sender
                 children = [n for n in self.neighbors if n != self.parent]
                 if children:
-                    self.send_spec("ECHO", self.neighbors)
+                    self.send("ECHO", self.neighbors)
                 else:
                     log_event(f"Node {self.name}: Echo complete.")
                     if self.parent:
