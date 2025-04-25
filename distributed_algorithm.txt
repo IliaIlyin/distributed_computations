@@ -1,0 +1,28 @@
+role initiator:
+    start:
+        send "ECHO" to neighbours
+    receive:
+         if message == "ACK":
+            self.received_acks += 1
+
+role particiant:
+     if message == "ECHO":
+            if not self.received:
+                self.received = True
+                self.parent = sender
+                children = [n for n in self.neighbors if n != self.parent]
+                if children:
+                    self.send_spec("ECHO", self.neighbors)
+                else:
+                    log_event(f"Node {self.name}: Echo complete.")
+                    if self.parent:
+                        scheduler.schedule_message(Message("ACK", self, self.parent))
+                    log_event(f"Node {self.name}: Algorithm finished.")
+        elif message == "ACK":
+            self.received_acks += 1
+            expected_acks = len([n for n in self.neighbors if n != self.parent])
+            if self.received_acks == expected_acks:
+                log_event(f"Node {self.name}: Echo complete.")
+                if self.parent:
+                    scheduler.schedule_message(Message("ACK", self, self.parent))
+                log_event(f"Node {self.name}: Algorithm finished.")
