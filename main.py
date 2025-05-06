@@ -1,26 +1,25 @@
+from __future__ import annotations
+
 import json
 import random
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
+from dataclasses import dataclass
 
-class Role(ABC):
-    @abstractmethod
-    def send(self, message, addressee):
-        pass
+class MessageType:
+    ECHO = "ECHO"
+    ACK = "ACK"
 
-    @abstractmethod
-    def receive(self, variable, sender=None):
-        pass
-
-def log_event(event):
+def log_event(event: str):
     with open("execution_log.txt", "a") as log_file:
         log_file.write(event + "\n")
 
+@dataclass
 class Message:
-    def __init__(self, content, sender, receiver):
-        self.content = content
-        self.sender = sender
-        self.receiver = receiver
+    content: str
+    sender: Role
+    receiver: Role
 
 class MessageScheduler:
     def __init__(self, nodes: dict[str, Role]):
@@ -37,102 +36,135 @@ class MessageScheduler:
             message = random.choice(self.messages)
             self.messages.remove(message)
             log_event(f"Scheduler delivers '{message.content}' from {message.sender.name} to {message.receiver.name}")
-            self.nodes[message.receiver.name].receive(message.content, message.sender)
+            message.receiver.receive(message.content, message.sender)
 
-scheduler = None
+class Role(ABC):
+    def __init__(self, name: str, neighbors: list[Role], scheduler: MessageScheduler):
+        self.name = name
+        self.neighbors = neighbors
+        self.scheduler = scheduler
+
+    @abstractmethod
+    def send(self, message: str, addressees: list[Role]):
+        pass
+
+    @abstractmethod
+    def receive(self, variable: str, sender: Optional[Role]):
+        pass
+
+    @abstractmethod
+    def is_terminated(self) -> bool:
+        pass
 
 class Initiator(Role):
-    def __init__(self, name, neighbors):
-        self.name = name
-        self.neighbors = neighbors
+    def __init__(self, name: str, neighbors: list[Role], scheduler: MessageScheduler):
+        super().__init__(name, neighbors, scheduler)
         self.received_acks = 0
 
-    def send(self, message, addressees):
+    def send(self, message: str, addressees: list[Role]):
         for neighbor in addressees:
-            scheduler.schedule_message(Message(message, self, neighbor))
+            self.scheduler.schedule_message(Message(message, self, neighbor))
 
-    def receive(self, variable, sender=None):
+    def receive(self, variable: str, sender: Optional[Role]):
         log_event(f"Node {self.name} received '{variable}' from {sender.name}")
-        if variable == "ACK":
-            self.received_acks += 1
-            if self.received_acks == len(self.neighbors):
-                log_event(f"Node {self.name}: Echo complete.")
-                log_event(f"Node {self.name}: Algorithm finished.")
+        if variable == MessageType.ACK:
+            self.handle_ack()
+
+    def handle_ack(self):
+        self.received_acks += 1
+        if self.is_terminated():
+            log_event(f"Node {self.name}: Echo complete.")
+            log_event(f"Node {self.name}: Algorithm finished.")
 
     def start(self):
-        self.send("ECHO", self.neighbors)
+        self.send(MessageType.ECHO, self.neighbors)
+
+    def is_terminated(self) -> bool:
+        return self.received_acks == len(self.neighbors)
 
 class Participant(Role):
-    def __init__(self, name, neighbors):
-        self.name = name
-        self.neighbors = neighbors
-        self.parent = None
+    def __init__(self, name: str, neighbors: list[Role], scheduler: MessageScheduler):
+        super().__init__(name, neighbors, scheduler)
+        self.parent: Optional[Role] = None
         self.received = False
         self.received_acks = 0
 
-    def send(self, message, addressees):
+    def send(self, message: str, addressees: list[Role]):
         for neighbor in addressees:
             if neighbor != self.parent:
-                scheduler.schedule_message(Message(message, self, neighbor))
+                self.scheduler.schedule_message(Message(message, self, neighbor))
 
-    def receive(self, variable, sender=None):
+    def receive(self, variable: str, sender: Optional[Role]):
         log_event(f"Node {self.name} received '{variable}' from {sender.name}")
-        if variable == "ECHO":
-            if not self.received:
-                self.received = True
-                self.parent = sender
-                children = [n for n in self.neighbors if n != self.parent]
-                if children:
-                    self.send("ECHO", self.neighbors)
-                else:
-                    log_event(f"Node {self.name}: Echo complete.")
-                    if self.parent:
-                        scheduler.schedule_message(Message("ACK", self, self.parent))
-                    log_event(f"Node {self.name}: Algorithm finished.")
-        elif variable == "ACK":
-            self.received_acks += 1
-            expected_acks = len([n for n in self.neighbors if n != self.parent])
-            if self.received_acks == expected_acks:
-                log_event(f"Node {self.name}: Echo complete.")
-                if self.parent:
-                    scheduler.schedule_message(Message("ACK", self, self.parent))
-                log_event(f"Node {self.name}: Algorithm finished.")
+        if variable == MessageType.ECHO:
+            self.handle_echo(sender)
+        elif variable == MessageType.ACK:
+            self.handle_ack()
 
+    def handle_echo(self, sender: Role):
+        if not self.received:
+            self.received = True
+            self.parent = sender
+            children = [n for n in self.neighbors if n != self.parent]
+            if children:
+                self.send(MessageType.ECHO, children)
+            else:
+                self.finish()
 
-def load_graph(filename):
+    def handle_ack(self):
+        self.received_acks += 1
+        if self.received_acks == self.expected_acks():
+            self.finish()
+
+    def expected_acks(self) -> int:
+        return len([n for n in self.neighbors if n != self.parent])
+
+    def finish(self):
+        log_event(f"Node {self.name}: Echo complete.")
+        if self.parent:
+            self.scheduler.schedule_message(Message(MessageType.ACK, self, self.parent))
+        log_event(f"Node {self.name}: Algorithm finished.")
+
+    def is_terminated(self) -> bool:
+        return self.received and self.received_acks == self.expected_acks()
+
+def load_graph(filename: str) -> dict:
     with open(filename, 'r') as f:
         return json.load(f)
 
-def create_nodes(graph_data) -> dict[str, Role]:
-    nodes = {}
-    for node, info in graph_data.items():
-        role = info.get("role", "participant")
-        nodes[node] = Initiator(node, []) if role == "initiator" else Participant(node, [])
-    for node, info in graph_data.items():
-        nodes[node].neighbors = [nodes[n] for n in info.get("neighbors", [])]
-    return nodes
+def create_nodes(graph_data: dict[str, dict]) -> dict[str, Role]:
+    temp_nodes = {}
+    scheduler = MessageScheduler(temp_nodes)
 
-def main():
-    global scheduler
-    filename = "graph.json"
-    graph_data = load_graph(filename)
-    nodes = create_nodes(graph_data)
-    scheduler = MessageScheduler(nodes)
+    for name, info in graph_data.items():
+        role_type = info.get("role", "participant")
+        temp_nodes[name] = (
+            Initiator(name, [], scheduler) if role_type == "initiator"
+            else Participant(name, [], scheduler)
+        )
 
+    for name, info in graph_data.items():
+        temp_nodes[name].neighbors = [temp_nodes[n] for n in info.get("neighbors", [])]
+
+    return temp_nodes
+
+def main(graph_file="graph.json"):
     with open("execution_log.txt", "w") as log_file:
         log_file.write("Execution Log:\n")
 
+    graph_data = load_graph(graph_file)
+    nodes = create_nodes(graph_data)
+
     initiator = next((n for n in nodes.values() if isinstance(n, Initiator)), None)
-    if initiator:
-        initiator.start()
-        while any(
-            isinstance(n, Participant) and n.received and n.received_acks < len([x for x in n.neighbors if x != n.parent])
-            or isinstance(n, Initiator) and n.received_acks < len(n.neighbors)
-            for n in nodes.values()
-        ):
-            scheduler.process_message()
-    else:
+    if not initiator:
         print("No initiator found in the graph.")
+        return
+
+    initiator.start()
+    scheduler = initiator.scheduler
+
+    while not all(n.is_terminated() for n in nodes.values()):
+        scheduler.process_message()
 
 if __name__ == "__main__":
     main()

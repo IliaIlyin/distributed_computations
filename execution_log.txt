@@ -4,6 +4,13 @@ Node A schedules 'ECHO' for C
 Scheduler delivers 'ECHO' from A to B
 Node B received 'ECHO' from A
 Node B schedules 'ECHO' for D
+Scheduler delivers 'ECHO' from A to C
+Node C received 'ECHO' from A
+Node C: Echo complete.
+Node C schedules 'ACK' for A
+Node C: Algorithm finished.
+Scheduler delivers 'ACK' from C to A
+Node A received 'ACK' from C
 Scheduler delivers 'ECHO' from B to D
 Node D received 'ECHO' from B
 Node D: Echo complete.
@@ -16,12 +23,5 @@ Node B schedules 'ACK' for A
 Node B: Algorithm finished.
 Scheduler delivers 'ACK' from B to A
 Node A received 'ACK' from B
-Scheduler delivers 'ECHO' from A to C
-Node C received 'ECHO' from A
-Node C: Echo complete.
-Node C schedules 'ACK' for A
-Node C: Algorithm finished.
-Scheduler delivers 'ACK' from C to A
-Node A received 'ACK' from C
 Node A: Echo complete.
 Node A: Algorithm finished.
