@@ -12,16 +12,27 @@ def log_event(event: str):
     with open("execution_log.txt", "a") as log_file:
         log_file.write(event + "\n")
 
+# --- Tiny type for Role IDs ---
+@dataclass(frozen=True)
+class RoleId:
+    value: str
+
+    def __str__(self) -> str:
+        return self.value
+
+
 class MessageType(Enum):
     ECHO = auto()
     ACK = auto()
+
 
 @dataclass
 class Message:
     type: MessageType
     content: str
-    sender: Role
-    receiver: Role
+    sender_id: RoleId
+    receiver_id: RoleId
+
 
 # TaskQueue to store messages
 class TaskQueue:
@@ -29,7 +40,9 @@ class TaskQueue:
         self._queue = []
 
     def enqueue(self, message: Message):
-        log_event(f"Enqueued message {message.type.name} from {message.sender.name} to {message.receiver.name}")
+        log_event(
+            f"Enqueued message {message.type.name} from {message.sender_id} to {message.receiver_id}"
+        )
         self._queue.append(message)
 
     def dequeue(self) -> Optional[Message]:
@@ -40,32 +53,37 @@ class TaskQueue:
     def has_tasks(self) -> bool:
         return bool(self._queue)
 
+
 # Communication system
 class CommunicationSystem:
-    def __init__(self, queue: TaskQueue, role_registry: dict[str, Role]):
+    def __init__(self, queue: TaskQueue, role_registry: dict[RoleId, Role]):
         self.queue = queue
-        self.roles = role_registry
+        self.roles = role_registry  # maps RoleId -> Role
 
     def send(self, message: Message):
-        log_event(f"Communication: Sending {message.type.name} from {message.sender.name} to {message.receiver.name}")
+        log_event(
+            f"Communication: Sending {message.type.name} from {message.sender_id} to {message.receiver_id}"
+        )
         self.queue.enqueue(message)
 
     def execute_one(self):
         """Process a single queued message if available."""
         message = self.queue.dequeue()
         if message:
-            receiver = message.receiver
-            receiver.receive(message, message.sender)
+            receiver = self.roles[message.receiver_id]
+            sender = self.roles[message.sender_id]
+            receiver.receive(message, sender)
+
 
 # Abstract Role class
 class Role(ABC):
-    def __init__(self, name: str, neighbors: list[Role], communication: CommunicationSystem):
-        self.name = name
-        self.neighbors = neighbors
+    def __init__(self, role_id: RoleId, neighbors: list[RoleId], communication: CommunicationSystem):
+        self.role_id = role_id
+        self.neighbor_ids = neighbors
         self.communication = communication
 
     @abstractmethod
-    def send(self, message_type: MessageType, addressees: list[Role]):
+    def send(self, message_type: MessageType, addressees: list[RoleId]):
         pass
 
     @abstractmethod
@@ -76,58 +94,64 @@ class Role(ABC):
     def is_terminated(self) -> bool:
         pass
 
+
 # Initiator role
 class Initiator(Role):
-    def __init__(self, name: str, neighbors: list[Role], communication: CommunicationSystem):
-        super().__init__(name, neighbors, communication)
+    def __init__(self, role_id: RoleId, neighbors: list[RoleId], communication: CommunicationSystem):
+        super().__init__(role_id, neighbors, communication)
         self.received_acks = 0
 
-    def send(self, message_type: MessageType, addressees: list[Role]):
-        for neighbor in addressees:
-            self.communication.send(Message(message_type, message_type.name, self, neighbor))
+    def send(self, message_type: MessageType, addressees: list[RoleId]):
+        for neighbor_id in addressees:
+            self.communication.send(
+                Message(message_type, message_type.name, self.role_id, neighbor_id)
+            )
 
     def receive(self, message: Message, sender: Optional[Role]):
-        log_event(f"Node {self.name} received '{message.type.name}' from {sender.name}")
+        log_event(f"Node {self.role_id} received '{message.type.name}' from {sender.role_id}")
         if message.type == MessageType.ACK:
             self.handle_ack()
 
     def handle_ack(self):
         self.received_acks += 1
         if self.is_terminated():
-            log_event(f"Node {self.name}: Echo complete.")
-            log_event(f"Node {self.name}: Algorithm finished.")
+            log_event(f"Node {self.role_id}: Echo complete.")
+            log_event(f"Node {self.role_id}: Algorithm finished.")
 
     def start(self):
-        self.send(MessageType.ECHO, self.neighbors)
+        self.send(MessageType.ECHO, self.neighbor_ids)
 
     def is_terminated(self) -> bool:
-        return self.received_acks == len(self.neighbors)
+        return self.received_acks == len(self.neighbor_ids)
+
 
 # Participant role
 class Participant(Role):
-    def __init__(self, name: str, neighbors: list[Role], communication: CommunicationSystem):
-        super().__init__(name, neighbors, communication)
-        self.parent: Optional[Role] = None
+    def __init__(self, role_id: RoleId, neighbors: list[RoleId], communication: CommunicationSystem):
+        super().__init__(role_id, neighbors, communication)
+        self.parent_id: Optional[RoleId] = None
         self.received = False
         self.received_acks = 0
 
-    def send(self, message_type: MessageType, addressees: list[Role]):
-        for neighbor in addressees:
-            if neighbor != self.parent:
-                self.communication.send(Message(message_type, message_type.name, self, neighbor))
+    def send(self, message_type: MessageType, addressees: list[RoleId]):
+        for neighbor_id in addressees:
+            if neighbor_id != self.parent_id:
+                self.communication.send(
+                    Message(message_type, message_type.name, self.role_id, neighbor_id)
+                )
 
     def receive(self, message: Message, sender: Optional[Role]):
-        log_event(f"Node {self.name} received '{message.type.name}' from {sender.name}")
+        log_event(f"Node {self.role_id} received '{message.type.name}' from {sender.role_id}")
         if message.type == MessageType.ECHO:
-            self.handle_echo(sender)
+            self.handle_echo(sender.role_id)
         elif message.type == MessageType.ACK:
             self.handle_ack()
 
-    def handle_echo(self, sender: Role):
+    def handle_echo(self, sender_id: RoleId):
         if not self.received:
             self.received = True
-            self.parent = sender
-            children = [n for n in self.neighbors if n != self.parent]
+            self.parent_id = sender_id
+            children = [n for n in self.neighbor_ids if n != self.parent_id]
             if children:
                 self.send(MessageType.ECHO, children)
             else:
@@ -139,37 +163,45 @@ class Participant(Role):
             self.finish()
 
     def expected_acks(self) -> int:
-        return len([n for n in self.neighbors if n != self.parent])
+        return len([n for n in self.neighbor_ids if n != self.parent_id])
 
     def finish(self):
-        log_event(f"Node {self.name}: Echo complete.")
-        if self.parent:
-            self.communication.send(Message(MessageType.ACK, MessageType.ACK.name, self, self.parent))
-        log_event(f"Node {self.name}: Algorithm finished.")
+        log_event(f"Node {self.role_id}: Echo complete.")
+        if self.parent_id:
+            self.communication.send(
+                Message(MessageType.ACK, MessageType.ACK.name, self.role_id, self.parent_id)
+            )
+        log_event(f"Node {self.role_id}: Algorithm finished.")
 
     def is_terminated(self) -> bool:
         return self.received and self.received_acks == self.expected_acks()
 
+
 # Load graph from file
 def load_graph(filename: str) -> dict:
-    with open(filename, 'r') as f:
+    with open(filename, "r") as f:
         return json.load(f)
 
-# Create node instances
-def create_nodes(graph_data: dict[str, dict], communication: CommunicationSystem) -> dict[str, Role]:
-    temp_nodes = {}
 
-    for name, info in graph_data.items():
+# Create node instances
+def create_nodes(
+    graph_data: dict[str, dict], communication: CommunicationSystem
+) -> dict[RoleId, Role]:
+    temp_nodes: dict[RoleId, Role] = {}
+
+    for role_name, info in graph_data.items():
+        role_id = RoleId(role_name)
+        neighbors = [RoleId(n) for n in info.get("neighbors", [])]
         role_type = info.get("role", "participant")
-        temp_nodes[name] = (
-            Initiator(name, [], communication) if role_type == "initiator"
-            else Participant(name, [], communication)
+
+        temp_nodes[role_id] = (
+            Initiator(role_id, neighbors, communication)
+            if role_type == "initiator"
+            else Participant(role_id, neighbors, communication)
         )
 
-    for name, info in graph_data.items():
-        temp_nodes[name].neighbors = [temp_nodes[n] for n in info.get("neighbors", [])]
-
     return temp_nodes
+
 
 # Main function
 def main(graph_file="graph.json"):
@@ -180,7 +212,7 @@ def main(graph_file="graph.json"):
     task_queue = TaskQueue()
 
     # Pass role registry later after creation
-    nodes = {}
+    nodes: dict[RoleId, Role] = {}
     communication = CommunicationSystem(task_queue, nodes)
     nodes.update(create_nodes(graph_data, communication))
 
@@ -193,6 +225,7 @@ def main(graph_file="graph.json"):
 
     while not all(n.is_terminated() for n in nodes.values()):
         communication.execute_one()
+
 
 if __name__ == "__main__":
     main()
