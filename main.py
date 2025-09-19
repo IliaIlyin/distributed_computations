@@ -12,16 +12,10 @@ def log_event(event: str):
     with open("execution_log.txt", "a") as log_file:
         log_file.write(event + "\n")
 
-# Enum for message types
 class MessageType(Enum):
     ECHO = auto()
     ACK = auto()
 
-# Forward declaration of Role for type hinting
-class Role(ABC):
-    ...
-
-# Message data class
 @dataclass
 class Message:
     type: MessageType
@@ -46,26 +40,22 @@ class TaskQueue:
     def has_tasks(self) -> bool:
         return bool(self._queue)
 
-# TaskExecutor to process messages
-class TaskExecutor:
+# Communication system
+class CommunicationSystem:
     def __init__(self, queue: TaskQueue, role_registry: dict[str, Role]):
         self.queue = queue
         self.roles = role_registry
 
-    def execute_one(self):
-        message = self.queue.dequeue()
-        if message:
-            log_event(f"Executing message {message.type.name} from {message.sender.name} to {message.receiver.name}")
-            self.roles[message.receiver.name].receive(message, message.sender)
-
-# Communication system
-class CommunicationSystem:
-    def __init__(self, queue: TaskQueue):
-        self.queue = queue
-
     def send(self, message: Message):
         log_event(f"Communication: Sending {message.type.name} from {message.sender.name} to {message.receiver.name}")
         self.queue.enqueue(message)
+
+    def execute_one(self):
+        """Process a single queued message if available."""
+        message = self.queue.dequeue()
+        if message:
+            receiver = message.receiver
+            receiver.receive(message, message.sender)
 
 # Abstract Role class
 class Role(ABC):
@@ -188,9 +178,11 @@ def main(graph_file="graph.json"):
 
     graph_data = load_graph(graph_file)
     task_queue = TaskQueue()
-    communication = CommunicationSystem(task_queue)
-    nodes = create_nodes(graph_data, communication)
-    executor = TaskExecutor(task_queue, nodes)
+
+    # Pass role registry later after creation
+    nodes = {}
+    communication = CommunicationSystem(task_queue, nodes)
+    nodes.update(create_nodes(graph_data, communication))
 
     initiator = next((n for n in nodes.values() if isinstance(n, Initiator)), None)
     if not initiator:
@@ -200,7 +192,7 @@ def main(graph_file="graph.json"):
     initiator.start()
 
     while not all(n.is_terminated() for n in nodes.values()):
-        executor.execute_one()
+        communication.execute_one()
 
 if __name__ == "__main__":
     main()
